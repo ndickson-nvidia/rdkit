@@ -62,6 +62,7 @@ rdkit_library(SmilesParse
               SmilesParse.cpp SmilesParseOps.cpp
               SmilesWrite.cpp SmartsWrite.cpp CXSmilesOps.cpp
               CanonicalizeStereoGroups.cpp SmilesJSONParsers.cpp
+              SmilesParseInternal.cpp
               ${BISON_OUTPUT_FILES}
               ${FLEX_OUTPUT_FILES}
               LINK_LIBRARIES GraphMol RDGeneral)
@@ -70,6 +71,7 @@ target_compile_definitions(SmilesParse PRIVATE RDKIT_SMILESPARSE_BUILD)
 rdkit_headers(SmartsWrite.h
               SmilesParse.h
               SmilesParseOps.h
+              SmilesParseInternal.h
               SmilesWrite.h 
               CanonicalizeStereoGroups.h
               SmilesJSONParsers.h DEST GraphMol/SmilesParse)
