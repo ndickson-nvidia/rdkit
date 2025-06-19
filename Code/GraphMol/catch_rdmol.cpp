@@ -1016,7 +1016,7 @@ TEST_CASE("Atom valence") {
     RDMol mol;
     mol.addAtom().setAtomicNum(6);
     CHECK_THROWS_AS(mol.getAtom(0).getExplicitValence(), Invar::Invariant);
-    CHECK(mol.getAtom(0).getImplicitValence() == 255);
+    CHECK_THROWS_AS(mol.getAtom(0).getImplicitValence(), Invar::Invariant);
     CHECK(mol.getAtom(0).needsUpdatePropertyCache());
   }
 
@@ -1025,7 +1025,7 @@ TEST_CASE("Atom valence") {
     mol.addAtom().setAtomicNum(6);
     mol.calcExplicitValence(0, false);
     CHECK(mol.getAtom(0).getExplicitValence() == 0);
-    CHECK(mol.getAtom(0).getImplicitValence() == 255);
+    CHECK_THROWS_AS(mol.getAtom(0).getImplicitValence(), Invar::Invariant);
 
     // Still needs implicit.
     CHECK(mol.getAtom(0).needsUpdatePropertyCache());
@@ -1394,19 +1394,20 @@ TEST_CASE("Remove bond") {
 }
 
 TEST_CASE("Remove bond with stereo") {
-  RDMol mol;
-  RDKit::SmilesParseTemp temp;
+  //RDKit::SmilesParseTemp temp;
 
   // The middle bond is trans, so the stereo atoms are 0 and 3, on the far ends
   // of the double bond respectively. The other 2 ends of the 4 bonds that determine
   // the cis/trans stereo are hydrogens.
   static const char* basicSmiles = "C/C=C/C";
 
-  SmilesParserParams params;
+  RDKit::v2::SmilesParse::SmilesParserParams params;
   params.sanitize = true;
   params.removeHs = true;
 
-  REQUIRE(RDKit::SmilesToMol(basicSmiles, params, mol, temp) == true);
+  //REQUIRE(RDKit::SmilesToMol(basicSmiles, params, mol, temp) == true);
+  std::unique_ptr<RWMol> molOwner = RDKit::v2::SmilesParse::MolFromSmiles(basicSmiles, params);
+  RDMol &mol = molOwner->asRDMol();
   REQUIRE(mol.getNumAtoms() == 4);
   REQUIRE(mol.getNumBonds() == 3);
 
@@ -1736,7 +1737,7 @@ TEST_CASE("Batch edits") {
 
     CHECK(!mol.hasAtomBookmark(0));
     CHECK(mol.getAtomWithBookmark(1) == 0);
-    CHECK(mol.getBondWithBookmark(0) == 0);
+    CHECK(!mol.hasBondBookmark(0));
   }
 
   SECTION("Properties updated") {
