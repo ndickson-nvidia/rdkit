@@ -330,10 +330,19 @@ Atom * Bond::getOtherAtom(Atom const *what) const {
 }
 
 STR_VECT Bond::getPropList(bool includePrivate, bool includeComputed) const {
-  return dp_dataMol->getPropList(includePrivate, includeComputed, RDMol::Scope::BOND, d_index);
+  STR_VECT res = dp_dataMol->getPropList(includePrivate, includeComputed,
+                                         RDMol::Scope::BOND, d_index);
+  if (includePrivate && includeComputed) {
+    res.push_back(detail::computedPropName);
+  }
+  return res;
 }
 
 bool Bond::hasProp(const std::string &key) const{
+  PropToken token(key);
+  if (token == detail::computedPropNameToken) {
+    return true;
+  }
   return dp_dataMol->hasBondProp(PropToken(key), getIdx());
 }
 

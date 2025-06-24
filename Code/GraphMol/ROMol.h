@@ -997,7 +997,14 @@ class RDKIT_GRAPHMOL_EXPORT ROMol {
   //! \overload
   template <typename T>
   void getProp(const std::string &key, T &res) const {
-    bool found = dp_mol->getMolPropIfPresent(PropToken(key), res);
+    PropToken token(key);
+    if constexpr (std::is_same_v<T, STR_VECT>) {
+      if (token == detail::computedPropNameToken) {
+        dp_mol->getComputedPropList(res);
+        return;
+      }
+    }
+    bool found = dp_mol->getMolPropIfPresent(token, res);
     if (!found) {
       throw KeyErrorException(key);
     }
@@ -1006,7 +1013,15 @@ class RDKIT_GRAPHMOL_EXPORT ROMol {
   //! \overload
   template <typename T>
   T getProp(const std::string &key) const {
-    return dp_mol->getMolProp<T>(PropToken(key));
+    PropToken token(key);
+    if constexpr (std::is_same_v<T, STR_VECT>) {
+      if (token == detail::computedPropNameToken) {
+        STR_VECT res;
+        dp_mol->getComputedPropList(res);
+        return res;
+      }
+    }
+    return dp_mol->getMolProp<T>(token);
   }
 
   //! returns whether or not we have a \c property with name \c key
@@ -1014,7 +1029,14 @@ class RDKIT_GRAPHMOL_EXPORT ROMol {
   //! \overload
   template <typename T>
   bool getPropIfPresent(const std::string &key, T &res) const {
-      return dp_mol->getMolPropIfPresent(PropToken(key), res);
+    PropToken token(key);
+    if constexpr (std::is_same_v<T, STR_VECT>) {
+      if (token == detail::computedPropNameToken) {
+        dp_mol->getComputedPropList(res);
+        return true;
+      }
+    }
+    return dp_mol->getMolPropIfPresent(token, res);
   }
 
   bool hasProp(const std::string &key) const;

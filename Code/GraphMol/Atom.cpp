@@ -786,13 +786,21 @@ int Atom::getAtomMapNum() const {
 }
 
 STR_VECT Atom::getPropList(bool includePrivate, bool includeComputed) const {
-  return dp_dataMol->getPropList(includePrivate, includeComputed,
-                                 RDMol::Scope::ATOM, d_index);
+  STR_VECT res = dp_dataMol->getPropList(includePrivate, includeComputed,
+                                         RDMol::Scope::ATOM, d_index);
+  if (includePrivate && includeComputed) {
+    res.push_back(detail::computedPropName);
+  }
+  return res;
 }
 
 
 bool Atom::hasProp(const std::string &key) const {
-  return dp_dataMol->hasAtomProp(PropToken(key), getIdx());
+  PropToken token(key);
+  if (token == detail::computedPropNameToken) {
+    return true;
+  }
+  return dp_dataMol->hasAtomProp(token, getIdx());
 }
 
 void Atom::clearProp(const std::string &key) const {

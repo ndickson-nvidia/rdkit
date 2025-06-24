@@ -1117,6 +1117,14 @@ private:
       Scope scope = Scope::MOL,
       uint32_t index = PropIterator::anyIndexMarker) const;
 
+private:
+  // This is used by ROMol, Atom, and Bond to get the "__computedProps" prop
+  void getComputedPropList(
+      STR_VECT &res, Scope scope = Scope::MOL,
+      uint32_t index = PropIterator::anyIndexMarker) const;
+
+public:
+
   PropIterator beginProps(bool includeComputed = true, Scope scope = Scope::MOL,
                           uint32_t index = PropIterator::anyIndexMarker) const {
     return PropIterator(properties.cbegin(), properties.cend(), includeComputed,

@@ -428,7 +428,14 @@ class RDKIT_GRAPHMOL_EXPORT Bond {
   //! \overload
   template <typename T>
   void getProp(const std::string &key, T &res) const {
-    bool found = dp_dataMol->getBondPropIfPresent(PropToken(key), getIdx(), res);
+    PropToken token(key);
+    if constexpr (std::is_same_v<T, STR_VECT>) {
+      if (token == detail::computedPropNameToken) {
+        dp_dataMol->getComputedPropList(res, RDMol::Scope::BOND, getIdx());
+        return;
+      }
+    }
+    bool found = dp_dataMol->getBondPropIfPresent(token, getIdx(), res);
     if (!found) {
       throw KeyErrorException(key);
     }
@@ -437,7 +444,15 @@ class RDKIT_GRAPHMOL_EXPORT Bond {
   //! \overload
   template <typename T>
   T getProp(const std::string &key) const {
-    return dp_dataMol->getBondProp<T>(PropToken(key), getIdx());
+    PropToken token(key);
+    if constexpr (std::is_same_v<T, STR_VECT>) {
+      if (token == detail::computedPropNameToken) {
+        STR_VECT res;
+        dp_dataMol->getComputedPropList(res, RDMol::Scope::BOND, getIdx());
+        return res;
+      }
+    }
+    return dp_dataMol->getBondProp<T>(token, getIdx());
   }
 
   //! returns whether or not we have a \c property with name \c key
@@ -445,7 +460,14 @@ class RDKIT_GRAPHMOL_EXPORT Bond {
   //! \overload
   template <typename T>
   bool getPropIfPresent(const std::string &key, T &res) const {
-    return dp_dataMol->getBondPropIfPresent(PropToken(key), getIdx(), res);
+    PropToken token(key);
+    if constexpr (std::is_same_v<T, STR_VECT>) {
+      if (token == detail::computedPropNameToken) {
+        dp_dataMol->getComputedPropList(res, RDMol::Scope::BOND, getIdx());
+        return true;
+      }
+    }
+    return dp_dataMol->getBondPropIfPresent(token, getIdx(), res);
   }
 
   //! \overload

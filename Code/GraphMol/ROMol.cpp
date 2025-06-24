@@ -321,11 +321,19 @@ void ROMol::setStereoGroups(std::vector<StereoGroup> stereo_groups) {
 }
 
 STR_VECT ROMol::getPropList(bool includePrivate, bool includeComputed) const {
-  return dp_mol->getPropList(includePrivate, includeComputed);
+  STR_VECT res = dp_mol->getPropList(includePrivate, includeComputed);
+  if (includePrivate && includeComputed) {
+    res.push_back(detail::computedPropName);
+  }
+  return res;
 }
 
 bool ROMol::hasProp(const std::string &key) const {
-  return dp_mol->hasProp(PropToken(key));
+  PropToken token(key);
+  if (token == detail::computedPropNameToken) {
+    return true;
+  }
+  return dp_mol->hasProp(token);
 }
 
 void ROMol::clearProp(const std::string &key) const {

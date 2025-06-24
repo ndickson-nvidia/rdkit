@@ -131,6 +131,7 @@ class PropToken {
 namespace detail {
 // used in various places for computed properties
 RDKIT_RDGENERAL_EXPORT extern const std::string computedPropName;
+RDKIT_RDGENERAL_EXPORT extern const PropToken computedPropNameToken;
 
 // This wraps a vector or local buffer as a bit set,
 // so that often, no allocation is needed, and if it is

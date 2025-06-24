@@ -2285,6 +2285,22 @@ std::vector<std::string> RDMol::getPropList(bool includePrivate,
   return res;
 }
 
+void RDMol::getComputedPropList(STR_VECT &res, Scope scope,
+                                uint32_t index) const {
+  res.clear();
+  for (const auto &prop : properties) {
+    if (prop.scope != scope) {
+      continue;
+    }
+    if (scope != Scope::MOL && index != PropIterator::anyIndexMarker && !prop.arrayData.isSetMask[index]) {
+      continue;
+    }
+    if (!prop.isComputed) {
+      continue;
+    }
+    res.push_back(prop.name.getString());
+  }
+}
 
 void RDMol::clearProps() {
   properties.clear();
