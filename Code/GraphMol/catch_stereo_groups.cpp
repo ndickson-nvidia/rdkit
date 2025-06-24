@@ -261,7 +261,7 @@ TEST_CASE("Chirality cleanup") {
     CHECK(group1Bonds == std::vector<uint32_t>{0, 2});
   }
 
-  SECTION("Remove already empty group") {
+  SECTION("Don't remove already empty group") {
     auto groups = std::make_unique<StereoGroups>();
     groups->addGroup(RDKit::StereoGroupType::STEREO_OR, {}, {}, 5);
     groups->addGroup(RDKit::StereoGroupType::STEREO_AND, {2, 3}, {0, 2});
@@ -269,13 +269,17 @@ TEST_CASE("Chirality cleanup") {
     cleanupStereoGroups(mol);
     const auto *res = mol.getStereoGroups();
     REQUIRE(res != nullptr);
-    REQUIRE(res->getNumGroups() == 1);
+    REQUIRE(res->getNumGroups() == 2);
 
     auto group0Atoms = iteratorToIndexVector(res->getAtoms(0));
     auto group0Bonds = iteratorToIndexVector(res->getBonds(0));
+    auto group1Atoms = iteratorToIndexVector(res->getAtoms(1));
+    auto group1Bonds = iteratorToIndexVector(res->getBonds(1));
 
-    CHECK(group0Atoms == std::vector<uint32_t>{2, 3});
-    CHECK(group0Bonds == std::vector<uint32_t>{0, 2});
+    CHECK(group0Atoms == std::vector<uint32_t>{});
+    CHECK(group0Bonds == std::vector<uint32_t>{});
+    CHECK(group1Atoms == std::vector<uint32_t>{2, 3});
+    CHECK(group1Bonds == std::vector<uint32_t>{0, 2});
   }
 
   SECTION("Atom removals, no empty groups") {

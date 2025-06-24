@@ -173,6 +173,8 @@ RDKIT_GRAPHMOL_EXPORT std::vector<StereoInfo> findPotentialStereo(
     const ROMol &mol);
 
 //! removes atoms without specified chirality from stereo groups
+RDKIT_GRAPHMOL_EXPORT void cleanupStereoGroups(RDMol &mol);
+//! overload
 RDKIT_GRAPHMOL_EXPORT void cleanupStereoGroups(ROMol &mol);
 
 //! calls the approximate legacy code for assigning CIP labels

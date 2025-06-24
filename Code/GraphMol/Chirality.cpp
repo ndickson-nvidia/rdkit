@@ -2219,36 +2219,72 @@ INT_VECT findStereoAtoms(const Bond *bond) {
     return {};
   }
 }
-void cleanupStereoGroups(ROMol &mol) {
-  std::vector<StereoGroup> newsgs;
-  for (auto sg : mol.getStereoGroups()) {
-    std::vector<Atom *> okatoms;
-    std::vector<Bond *> okbonds;
+
+void cleanupStereoGroups(ROMol &mol) { cleanupStereoGroups(mol.asRDMol()); }
+void cleanupStereoGroups(RDMol &mol) {
+  StereoGroups *stereoGroups = mol.getStereoGroups();
+  if (stereoGroups == nullptr) {
+    return;
+  }
+  size_t destAtomIdx = 0;
+  size_t destBondIdx = 0;
+  size_t destGroupIdx = 0;
+  for (size_t groupIdx = 0, numGroups = stereoGroups->getNumGroups();
+       groupIdx < numGroups; ++groupIdx) {
+    size_t sourceAtomIdx = stereoGroups->atomBegins[groupIdx];
+    size_t sourceAtomEnd = stereoGroups->atomBegins[groupIdx + 1];
+    size_t sourceBondIdx = stereoGroups->bondBegins[groupIdx];
+    size_t sourceBondEnd = stereoGroups->bondBegins[groupIdx + 1];
+    stereoGroups->atomBegins[destGroupIdx] = destAtomIdx;
+    stereoGroups->bondBegins[destGroupIdx] = destBondIdx;
+
+    size_t numAtomsKept = 0;
     bool keep = true;
-    for (const auto atom : sg.getAtoms()) {
-      if (atom->getChiralTag() == Atom::ChiralType::CHI_UNSPECIFIED) {
+    for (; sourceAtomIdx < sourceAtomEnd; ++sourceAtomIdx) {
+      atomindex_t atomIdx = stereoGroups->atoms[sourceAtomIdx];
+      if (mol.getAtom(atomIdx).getChiralTag() ==
+          Atom::ChiralType::CHI_UNSPECIFIED) {
         keep = false;
       } else {
-        okatoms.push_back(atom);
-      }
-    }
-    for (const auto bond : sg.getBonds()) {
-      if (bond->getStereo() != Bond::BondStereo::STEREOATROPCCW &&
-          bond->getStereo() != Bond::BondStereo::STEREOATROPCW) {
-        keep = false;
-      } else {
-        okbonds.push_back(bond);
+        stereoGroups->atoms[destAtomIdx] = atomIdx;
+        ++destAtomIdx;
+        ++numAtomsKept;
       }
     }
 
-    if (keep) {
-      newsgs.push_back(sg);
-    } else if (!okatoms.empty()) {
-      newsgs.emplace_back(sg.getGroupType(), std::move(okatoms),
-                          std::move(okbonds), sg.getReadId());
+    uint32_t tempDestBondIdx = destBondIdx;
+    for (; sourceBondIdx < sourceBondEnd; ++sourceBondIdx) {
+      uint32_t bondIdx = stereoGroups->bonds[sourceBondIdx];
+      BondStereo stereo = mol.getBond(bondIdx).getStereo();
+      if (stereo != BondStereo::STEREOATROPCCW &&
+          stereo != BondStereo::STEREOATROPCW) {
+        keep = false;
+      } else {
+        stereoGroups->bonds[tempDestBondIdx] = bondIdx;
+        ++tempDestBondIdx;
+      }
+    }
+
+    if (keep || numAtomsKept != 0) {
+      destBondIdx = tempDestBondIdx;
+      stereoGroups->stereoTypes[destGroupIdx] =
+          stereoGroups->stereoTypes[groupIdx];
+      stereoGroups->readIds[destGroupIdx] = stereoGroups->readIds[groupIdx];
+      stereoGroups->writeIds[destGroupIdx] =
+          keep ? stereoGroups->writeIds[groupIdx]
+               : StereoGroups::undefinedGroupId;
+      ++destGroupIdx;
     }
   }
-  mol.setStereoGroups(std::move(newsgs));
+  stereoGroups->stereoTypes.resize(destGroupIdx);
+  stereoGroups->readIds.resize(destGroupIdx);
+  stereoGroups->writeIds.resize(destGroupIdx);
+  stereoGroups->atomBegins[destGroupIdx] = destAtomIdx;
+  stereoGroups->bondBegins[destGroupIdx] = destBondIdx;
+  stereoGroups->atomBegins.resize(destGroupIdx + 1);
+  stereoGroups->bondBegins.resize(destGroupIdx + 1);
+  stereoGroups->atoms.resize(destAtomIdx);
+  stereoGroups->bonds.resize(destBondIdx);
 }
 
 
