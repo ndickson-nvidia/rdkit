@@ -462,6 +462,9 @@ struct StereoGroups {
   //! Removes atom index from all groups where present. If decrementIndices is true,
   //! all atom indices greater than the removed index are decremented.
   void removeAtomFromGroups(uint32_t atomIndex, bool decrementIndices = false);
+  //! Removes bond index from all groups where present. If decrementIndices is
+  //! true, all bond indices greater than the removed index are decremented.
+  void removeBondFromGroups(uint32_t bondIndex, bool decrementIndices = false);
   //! Remove any group containing the specified atom.
   void removeGroupsWithAtom(uint32_t atomIndex);
   //! Remove any group containing any of the specified atoms.

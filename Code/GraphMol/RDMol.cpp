@@ -1613,9 +1613,42 @@ void StereoGroups::removeAtomFromGroups(uint32_t atomIndex, bool decrementIndice
   atomBegins[numGroups] = runningNumAtoms;
   atoms.resize(runningNumAtoms);
 
-  // Remove groups with no atoms
+  // Remove groups that have both no atoms and no bonds
+  // Equivalently, keep groups that have at least one atom or bond
   removeGroups(*this, [](const StereoGroups &groups, uint32_t i) {
-    return groups.atomBegins[i] != groups.atomBegins[i + 1];
+    return groups.atomBegins[i] != groups.atomBegins[i + 1] ||
+           groups.bondBegins[i] != groups.bondBegins[i + 1];
+  });
+}
+
+void StereoGroups::removeBondFromGroups(uint32_t bondIndex, bool decrementIndices) {
+  const uint32_t numGroups = stereoTypes.size();
+  uint32_t runningNumBonds = 0;
+  for (uint32_t i = 0; i < numGroups; i++) {
+    const uint32_t bondBegin = bondBegins[i];
+    const uint32_t bondEnd = bondBegins[i + 1];
+
+    // set atomBegins again now that we've stored the previous value.
+    bondBegins[i] = runningNumBonds;
+
+    for (uint32_t j = bondBegin; j < bondEnd; ++j) {
+      if (bonds[j] != bondIndex) {
+        bonds[runningNumBonds] = bonds[j];
+        if (decrementIndices && bonds[j] > bondIndex) {
+          bonds[runningNumBonds]--;
+        }
+        ++runningNumBonds;
+      }
+    }
+  }
+  bondBegins[numGroups] = runningNumBonds;
+  bonds.resize(runningNumBonds);
+
+  // Remove groups that have both no atoms and no bonds
+  // Equivalently, keep groups that have at least one atom or bond
+  removeGroups(*this, [](const StereoGroups &groups, uint32_t i) {
+    return groups.atomBegins[i] != groups.atomBegins[i + 1] ||
+           groups.bondBegins[i] != groups.bondBegins[i + 1];
   });
 }
 
@@ -2646,9 +2679,17 @@ void RDMol::removeAtom(atomindex_t atomIndex, bool clearProps) {
           copySize);
     }
   }
+  CompatibilityData *compat = getCompatibilityDataIfPresent();
+  if (compat != nullptr) {
+    for (auto &conf : compat->conformers) {
+      RDGeom::POINT3D_VECT &positions = conf->getPositions();
+      std::copy(positions.begin() + atomIndex + 1, positions.end(),
+                positions.begin() + atomIndex);
+      positions.pop_back();
+    }
+  }
 
   // Update bookmarks
-  CompatibilityData *compat = getCompatibilityDataIfPresent();
   if (compat != nullptr) {
     const Atom *want = compat->atoms[atomIndex].get();
     std::vector<int> deleteList;
@@ -2663,13 +2704,6 @@ void RDMol::removeAtom(atomindex_t atomIndex, bool clearProps) {
     }
     for (int key : deleteList) {
       compat->atomBookmarks.erase(key);
-    }
-
-    for (auto &conf : compat->conformers) {
-      RDGeom::POINT3D_VECT &positions = conf->getPositions();
-      std::copy(positions.begin() + atomIndex + 1, positions.end(),
-                positions.begin() + atomIndex);
-      positions.pop_back();
     }
   } else {
     removeIndexAndDecrementBookmarks(atomBookmarks, atomIndex);
@@ -2702,6 +2736,13 @@ void RDMol::removeAtom(atomindex_t atomIndex, bool clearProps) {
   // Update stereo groups.
   if (stereoGroups != nullptr) {
     stereoGroups->removeAtomFromGroups(atomIndex, /*decrement=*/true);
+  }
+  if (compat != nullptr) {
+    std::vector<StereoGroup> *compatStereoGroups =
+        compat->stereoGroups.load(std::memory_order_acquire);
+    if (compatStereoGroups != nullptr) {
+      removeAtomFromGroups(compat->atoms[atomIndex].get(), *compatStereoGroups);
+    }
   }
 
   // Clear computed properties
@@ -2834,6 +2875,20 @@ void RDMol::removeBond(uint32_t bondIndex) {
   }
   // Handle substance groups
   removeSubstanceGroupsReferencingBond(*this, bondIndex);
+
+  // Handle stereo groups
+  if (stereoGroups != nullptr) {
+    stereoGroups->removeBondFromGroups(bondIndex, /*decrement=*/true);
+  }
+  if (compat != nullptr) {
+    std::vector<StereoGroup> *compatStereoGroups =
+        compat->stereoGroups.load(std::memory_order_acquire);
+    if (compatStereoGroups != nullptr) {
+      // FIXME: Uncomment this line after rebasing to get the fix that
+      // introduces removeBondFromGroups
+      // removeBondFromGroups(compat->bonds[bondIndex].get(), *compatStereoGroups);
+    }
+  }
 
   // Finally remove the bond and update index vectors.
   bondData.erase(bondData.begin() + bondIndex);
@@ -3387,13 +3442,16 @@ static void expandConformerIdsAndFlags(
 
 void RDMol::copyConformersFromCompatibilityData(const CompatibilityData* compatData, int confId) const {
   PRECONDITION(compatData != nullptr, "No compatibility data to copy from");
-  PRECONDITION((confId >= 0 && numConformers == 1) ||
+  PRECONDITION((confId >= 0 && numConformers <= 1) ||
                    compatData->conformers.size() == numConformers,
                "Add space for conformers before copying from compatibility data");
   size_t confIndex = 0;
   const size_t numAtoms = getNumAtoms();
   for (const auto& conf : compatData->conformers) {
     if (confId < 0 || int(conf->getId()) == confId) {
+      PRECONDITION(
+          confIndex < numConformers,
+          "Add space for conformers before copying from compatibility data");
       size_t atomPositionOffset = confIndex * conformerAtomCapacity * 3;
       const RDGeom::POINT3D_VECT& positions = conf->getPositions();
       PRECONDITION(positions.size() == numAtoms,
