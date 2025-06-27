@@ -883,6 +883,11 @@ RDKIT_GRAPHMOL_EXPORT void setHybridization(ROMol &mol);
     - Since SSSR may not be unique, a post-SSSR step to symmetrize may be
   done. The extra rings this process adds can be quite useful.
 */
+RDKIT_GRAPHMOL_EXPORT int findSSSR(
+    const RDMol &mol, RingInfoCache &ringInfo, bool includeDativeBonds = false,
+    std::vector<atomindex_t> *extraRingAtoms = nullptr,
+    std::vector<uint32_t> *extraRingBegins = nullptr);
+//! \overload
 RDKIT_GRAPHMOL_EXPORT int findSSSR(const ROMol &mol,
                                    std::vector<std::vector<int>> &res,
                                    bool includeDativeBonds = false);
@@ -930,6 +935,9 @@ RDKIT_GRAPHMOL_EXPORT void findRingFamilies(const ROMol &mol);
    - if no SSSR rings are found on the molecule - MolOps::findSSSR() is called
   first
 */
+RDKIT_GRAPHMOL_EXPORT int symmetrizeSSSR(RDMol &mol,
+                                         bool includeDativeBonds = false);
+//! \overload
 RDKIT_GRAPHMOL_EXPORT int symmetrizeSSSR(ROMol &mol,
                                          std::vector<std::vector<int>> &res,
                                          bool includeDativeBonds = false);

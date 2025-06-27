@@ -146,8 +146,8 @@ void pickD2Nodes(const ROMol &tMol, INT_VECT &d2nodes, const INT_VECT &currFrag,
 }
 
 void markUselessD2s(uint32_t rootAtomIndex, const RDMol &tMol,
-                    boost::dynamic_bitset<> &forb, const INT_VECT &atomDegrees,
-                    const boost::dynamic_bitset<> &activeBonds) {
+                    detail::BitSetWrapper &forb, const INT_VECT &atomDegrees,
+                    const detail::BitSetWrapper &activeBonds) {
   // recursive function to mark any degree 2 nodes that are already represented
   // by root for the purpose of finding smallest rings.
   auto [beg, end] = tMol.getAtomBonds(rootAtomIndex);
@@ -168,11 +168,12 @@ void markUselessD2s(uint32_t rootAtomIndex, const RDMol &tMol,
 void pickD2Nodes(const RDMol &tMol, INT_VECT &d2nodes,
                  const uint32_t *currFragBegin, const uint32_t *currFragEnd,
                  const INT_VECT &atomDegrees,
-                 const boost::dynamic_bitset<> &activeBonds) {
+                 const detail::BitSetWrapper &activeBonds,
+                 detail::BitSetWrapper &forb) {
   d2nodes.resize(0);
 
   // forb contains all d2 nodes, not just the ones we want to keep
-  boost::dynamic_bitset<> forb(tMol.getNumAtoms());
+  forb.reset();
   for (auto it = currFragBegin; it != currFragEnd; ++it) {
     const uint32_t axci = *it;
     if (atomDegrees[axci] == 2 && !forb[axci]) {
@@ -237,7 +238,13 @@ auto compRingSize = [](const auto &v1, const auto &v2) {
   return v1.size() < v2.size();
 };
 
-void removeExtraRings(VECT_INT_VECT &res, unsigned int, const ROMol &mol) {
+void removeExtraRings(std::vector<atomindex_t> &resAtoms,
+                      std::vector<uint32_t> &resBegins,
+                      const RDMol &mol,
+                      std::vector<atomindex_t> *extraRingAtoms,
+                      std::vector<uint32_t> *extraRingBegins) {
+  const uint32_t numRings = resBegins.size() - 1;
+
   // sort on size
   std::sort(res.begin(), res.end(), compRingSize);
 
@@ -254,15 +261,17 @@ void removeExtraRings(VECT_INT_VECT &res, unsigned int, const ROMol &mol) {
     bitBrings.push_back(lring);
   }
 
-  boost::dynamic_bitset<> availRings(res.size());
+  boost::dynamic_bitset<> availRings(numRings);
   availRings.set();
-  boost::dynamic_bitset<> keepRings(res.size());
+  boost::dynamic_bitset<> keepRings(numRings);
   boost::dynamic_bitset<> munion(mol.getNumBonds());
 
   // optimization - don't reallocate a new one each loop
   boost::dynamic_bitset<> workspace(mol.getNumBonds());
 
-  for (unsigned int i = 0; i < res.size(); ++i) {
+  uint32_t numKeptRings = 0;
+
+  for (unsigned int i = 0; i < numRings; ++i) {
     // skip this ring if we've already seen all of its bonds
     if (bitBrings[i].is_subset_of(munion)) {
       availRings.set(i, 0);
@@ -273,6 +282,7 @@ void removeExtraRings(VECT_INT_VECT &res, unsigned int, const ROMol &mol) {
 
     munion |= bitBrings[i];
     keepRings.set(i);
+    ++numKeptRings;
 
     // from this ring we consider all others that are still available and the
     // same size
@@ -309,29 +319,50 @@ void removeExtraRings(VECT_INT_VECT &res, unsigned int, const ROMol &mol) {
         availRings.set(bestJ, 0);
       } else {
         keepRings.set(bestJ);
+        ++numKeptRings;
         availRings.set(bestJ, 0);
         munion |= bitBrings[bestJ];
       }
     }
   }
+
+  if (numKeptRings == numRings) {
+    return;
+  }
+  const uint32_t numExtraRings = numRings - numKeptRings;
+
   // remove the extra rings from res and store them on the molecule in case we
   // wish symmetrize the SSSRs later
-  VECT_INT_VECT extras;
-  VECT_INT_VECT temp = res;
-  res.resize(0);
-  for (unsigned int i = 0; i < temp.size(); i++) {
-    if (keepRings[i]) {
-      res.push_back(temp[i]);
-    } else {
-      extras.push_back(temp[i]);
+  uint32_t resDestRing = 0;
+  uint32_t resDestAtom = 0;
+  for (unsigned int i = 0; i < numRings; i++) {
+    const bool keepRing = keepRings[i];
+    const uint32_t resSourceAtomBegin = resBegins[i];
+    const uint32_t resSourceAtomEnd = resBegins[i + 1];
+    const uint32_t ringSize = resSourceAtomEnd - resSourceAtomBegin;
+    if (!keepRing) {
+      // add extra rings (there could already be some from previous fragments)
+      if (extraRingAtoms != nullptr && extraRingBegins != nullptr) {
+        if (extraRingBegins->size() == 0) {
+          extraRingBegins->reserve(numExtraRings + 1);
+          extraRingBegins->push_back(0);
+        }
+        extraRingAtoms->insert(extraRingAtoms->end(),
+                               resAtoms.begin() + resSourceAtomBegin,
+                               resAtoms.begin() + resSourceAtomEnd);
+        extraRingBegins->push_back(extraRingAtoms->size());
+      }
+    } else if (resDestRing != i) {
+      std::copy(resAtoms.begin() + resSourceAtomBegin,
+                resAtoms.begin() + resSourceAtomEnd,
+                resAtoms.begin() + resDestAtom);
+      resDestAtom += ringSize;
+      resBegins[resDestRing + 1] = resDestAtom;
+      ++resDestRing;
     }
   }
-  // add extra rings to the molecule (there could already be some from previous
-  // fragments)
-  VECT_INT_VECT molExtras;
-  mol.getPropIfPresent(common_properties::extraRings, molExtras);
-  molExtras.insert(molExtras.end(), extras.begin(), extras.end());
-  mol.setProp(common_properties::extraRings, molExtras, true);
+  resAtoms.resize(resDestAtom);
+  resBegins.resize(resDestRing);
 }
 
 void findRingsD2nodes(const ROMol &tMol, VECT_INT_VECT &res,
@@ -648,11 +679,11 @@ void trimBonds(unsigned int cand, const ROMol &tMol, INT_SET &changed,
   }
 }
 void trimBonds(const uint32_t cand, const RDMol &tMol, std::vector<uint32_t> &changed,
-               INT_VECT &atomDegrees, boost::dynamic_bitset<> &activeBonds) {
+               INT_VECT &atomDegrees, detail::BitSetWrapper &activeBonds) {
   auto [beg, end] = tMol.getAtomBonds(cand);
   for (; beg != end; ++beg) {
     const uint32_t bondIndex = *beg;
-    if (!activeBonds[bondIndex]) {
+    if (!activeBonds.get(bondIndex)) {
       continue;
     }
     const BondData &bond = tMol.getBond(bondIndex);
@@ -895,33 +926,40 @@ int findSSSR(const ROMol &mol, VECT_INT_VECT *res, bool includeDativeBonds) {
     return findSSSR(mol, (*res), includeDativeBonds);
   }
 }
-
 int findSSSR(const ROMol &mol, VECT_INT_VECT &res, bool includeDativeBonds) {
-  res.resize(0);
-  if (mol.getRingInfo()->isInitialized()) {
-    mol.getRingInfo()->reset();
+  // The original code wrote to the RingInfo, even though the mol is const.
+  std::vector<atomindex_t> extraRingAtoms;
+  std::vector<uint32_t> extraRingBegins;
+  findSSSR(mol.asRDMol(),
+           const_cast<RingInfoCache&>(mol.asRDMol().getRingInfo()),
+           includeDativeBonds, &extraRingAtoms, &extraRingBegins);
+  // FIXME:
+  // Fill in res as the atoms for each ring
+  // Also add extraRings property
+}
+int findSSSR(const RDMol &mol, RingInfoCache &ringInfo, bool includeDativeBonds,
+             std::vector<atomindex_t> *extraRingAtoms,
+             std::vector<uint32_t> *extraRingBegins) {
+  if (ringInfo.isInitialized()) {
+    ringInfo.reset();
   }
-  mol.getRingInfo()->initialize(FIND_RING_TYPE_SSSR);
-  RINGINVAR_SET invars;
+  ringInfo.isInit = true;
+  ringInfo.findRingType = FIND_RING_TYPE_SSSR;
 
   unsigned int nats = mol.getNumAtoms();
-  boost::dynamic_bitset<> activeAtoms(nats);
-  activeAtoms.set();
+  //boost::dynamic_bitset<> activeAtoms(nats);
+  //activeAtoms.set();
   int nbnds = mol.getNumBonds();
-  boost::dynamic_bitset<> activeBonds(nbnds);
-  activeBonds.set();
+  std::vector<uint64_t> activeBondsStorage;
+  detail::BitSetWrapper activeBonds(activeBondsStorage, nbnds, true);
 
   // Zero-order bonds are not candidates for rings, and dative bonds may also be
   // out
-  ROMol::EDGE_ITER firstB, lastB;
-  boost::tie(firstB, lastB) = mol.getEdges();
-  while (firstB != lastB) {
-    const Bond *bond = mol[*firstB];
-    if (bond->getBondType() == Bond::ZERO ||
-        (!includeDativeBonds && isDative(*bond))) {
-      activeBonds[bond->getIdx()] = 0;
+  for (uint32_t bond_idx = 0; bond_idx < nbnds; ++bond_idx) {
+    const BondEnums::BondType bondType = mol.getBond(bond_idx).getBondType();
+    if (bondType == Bond::ZERO || (!includeDativeBonds && isDative(bondType))) {
+      activeBonds.reset(bond_idx);
     }
-    ++firstB;
   }
 
   boost::dynamic_bitset<> ringBonds(nbnds);
@@ -930,54 +968,102 @@ int findSSSR(const ROMol &mol, VECT_INT_VECT &res, bool includeDativeBonds) {
   INT_VECT atomDegrees(nats);
   INT_VECT atomDegreesWithZeroOrderBonds(nats);
   for (unsigned int i = 0; i < nats; ++i) {
-    const Atom *atom = mol.getAtomWithIdx(i);
-    int deg = atom->getDegree();
+    int deg = mol.getAtomDegree(i);
     atomDegrees[i] = deg;
     atomDegreesWithZeroOrderBonds[i] = deg;
-    for (const auto bond : mol.atomBonds(atom)) {
-      if (bond->getBondType() == Bond::ZERO ||
-          (!includeDativeBonds && isDative(*bond))) {
+    for (auto [begin, end] = mol.getAtomBonds(i); begin != end; ++begin) {
+      const BondEnums::BondType bondType = mol.getBond(*begin).getBondType();
+      if (bondType == Bond::ZERO ||
+          (!includeDativeBonds && isDative(bondType))) {
         atomDegrees[i]--;
       }
     }
   }
-  mol.clearProp(common_properties::extraRings);
+  if (extraRingAtoms != nullptr && extraRingBegins != nullptr) {
+    extraRingAtoms->resize(0);
+    extraRingBegins->resize(0);
+  }
 
   // find the number of fragments in the molecule - we will loop over them
-  VECT_INT_VECT frags;
-  INT_VECT curFrag;
-  unsigned int nfrags = getMolFrags(mol, frags);
+  std::vector<uint32_t> atomFrags;
+  unsigned int nfrags = getMolFrags(mol, atomFrags);
+
+  // Invert to find the atoms in each fragment
+  // Start by counting the number of atoms in each fragment
+  std::vector<uint32_t> fragStarts;
+  fragStarts.resize(nfrags+1, 0);
+  for (uint32_t atomFrag : atomFrags) {
+    ++fragStarts[atomFrag+1];
+  }
+  // Find where each fragment starts
+  std::partial_sum(fragStarts.begin() + 1, fragStarts.end(),
+                   fragStarts.begin() + 1);
+
+  // Fill in the atoms in each fragment
+  std::vector<atomindex_t> frags;
+  frags.resize(nats);
+  for (atomindex_t atom_idx = 0; atom_idx < nats; ++atom_idx) {
+    const uint32_t frag = atomFrags[atom_idx];
+    const uint32_t fragNext = fragStarts[frag];
+    ++fragStarts[frag];
+    frags[fragNext] = atom_idx;
+  }
+  // Update starts
+  std::copy_backward(fragStarts.begin(), fragStarts.end(), fragStarts.begin() + 1);
+  fragStarts[0] = 0;
+
+  // the following is the list of atoms that are useful in the next round of
+  // trimming basically atoms that become degree 0 or 1 because of bond
+  // removals initialized with atoms of degrees 0 and 1
+  // It was previously an ordered set, but only the first entry was visited
+  // at any time, so it's now a min heap.
+  std::vector<atomindex_t> changed;
+
+  //RINGINVAR_SET invars;
+
+  // Outside the loop to avoid repeated reallocation
+  std::vector<uint64_t> doneAtsStorage;
+  detail::BitSetWrapper doneAts(doneAtsStorage, nats);
+  std::vector<uint64_t> forbStorage;
+  detail::BitSetWrapper forb(forbStorage, nats);
+  std::vector<uint32_t> possibleBonds;
+  std::vector<uint64_t> deadBondsStorage;
+  detail::BitSetWrapper deadBonds(deadBondsStorage, mol.getNumBonds());
+
   // loop over the fragments in a molecule
   for (unsigned int fi = 0; fi < nfrags; ++fi) {
-    VECT_INT_VECT fragRes;
-    curFrag = frags[fi];
+    // TODO: Is this necessary, or is changed always empty at this point?
+    changed.clear();
 
-    if (curFrag.size() < 3) {
+    //VECT_INT_VECT fragRes;
+    const size_t curFragSize = fragStarts[fi + 1] - fragStarts[fi];
+    const atomindex_t *const curFragBegin = frags.data() + fragStarts[fi];
+    const atomindex_t *const curFragEnd = frags.data() + fragStarts[fi + 1];
+
+    if (curFragSize < 3) {
       continue;
     }
 
-    // the following is the list of atoms that are useful in the next round of
-    // trimming basically atoms that become degree 0 or 1 because of bond
-    // removals initialized with atoms of degrees 0 and 1
-    INT_SET changed;
     int bndcnt_with_zero_order_bonds = 0;
     unsigned int nbnds = 0;
-    for (auto atom_idx : curFrag) {
+    for (auto *current = curFragBegin; current != curFragEnd; ++current) {
+      auto atom_idx = *current;
       bndcnt_with_zero_order_bonds += atomDegreesWithZeroOrderBonds[atom_idx];
 
       int deg = atomDegrees[atom_idx];
 
       nbnds += deg;
       if (deg < 2) {
-        changed.insert(atom_idx);
+        changed.push_back(atom_idx);
       }
     }
+    std::make_heap(changed.begin(), changed.end(), std::greater());
 
     // check to see if this fragment can even have a possible ring
     CHECK_INVARIANT(bndcnt_with_zero_order_bonds % 2 == 0,
                     "fragment graph has a dangling degree");
     bndcnt_with_zero_order_bonds = bndcnt_with_zero_order_bonds / 2;
-    int num_possible_rings = bndcnt_with_zero_order_bonds - curFrag.size() + 1;
+    int num_possible_rings = bndcnt_with_zero_order_bonds - curFragSize + 1;
     if (num_possible_rings < 1) {
       continue;
     }
@@ -986,9 +1072,9 @@ int findSSSR(const ROMol &mol, VECT_INT_VECT &res, bool includeDativeBonds) {
                     "fragment graph problem when including zero-order bonds");
     nbnds = nbnds / 2;
 
-    boost::dynamic_bitset<> doneAts(nats);
+    doneAts.reset();
     unsigned int nAtomsDone = 0;
-    while (nAtomsDone < curFrag.size()) {
+    while (nAtomsDone < curFragSize) {
       // std::cerr<<" ndone: "<<nAtomsDone<<std::endl;
       // std::cerr<<" activeBonds: "<<activeBonds<<std::endl;
       // std::cerr<<"  done: ";
@@ -1009,7 +1095,8 @@ int findSSSR(const ROMol &mol, VECT_INT_VECT &res, bool includeDativeBonds) {
       // all atoms left in the fragment should at least have a degree >= 2
       // collect all the degree two nodes;
       INT_VECT d2nodes;
-      FindRings::pickD2Nodes(mol, d2nodes, curFrag, atomDegrees, activeBonds);
+      FindRings::pickD2Nodes(mol, d2nodes, curFragBegin, curFragEnd,
+                             atomDegrees, activeBonds, forb);
       if (d2nodes.size() > 0) {  // deal with the current degree two nodes
         // place to record any duplicate rings discovered from the current d2
         // nodes
@@ -1023,12 +1110,11 @@ int findSSSR(const ROMol &mol, VECT_INT_VECT &res, bool includeDativeBonds) {
           FindRings::trimBonds((*d2i), mol, changed, atomDegrees, activeBonds);
         }
       }  // end of degree two nodes
-      else if (nAtomsDone <
-               curFrag.size()) {  // now deal with higher degree nodes
+      else if (nAtomsDone < curFragSize) {  // now deal with higher degree nodes
         // this is brutal - we have no degree 2 nodes - find the first
         // possible degree 3 node
         int cand = -1;
-        for (INT_VECT_CI aidi = curFrag.begin(); aidi != curFrag.end();
+        for (auto aidi = curFragBegin; aidi != curFragEnd;
              aidi++) {
           unsigned int deg = atomDegrees[*aidi];
           if (deg == 3) {
@@ -1051,7 +1137,7 @@ int findSSSR(const ROMol &mol, VECT_INT_VECT &res, bool includeDativeBonds) {
     }  // done finding rings in this fragment
 
     // calculate the cyclomatic number for the fragment:
-    int nexpt = rdcast<int>((nbnds - curFrag.size() + 1));
+    int nexpt = rdcast<int>((nbnds - curFragSize + 1));
     int ssiz = rdcast<int>(fragRes.size());
 
     // first check that we got at least the number of expected rings
@@ -1061,33 +1147,34 @@ int findSSSR(const ROMol &mol, VECT_INT_VECT &res, bool includeDativeBonds) {
       // above would miss rings.
       // for this fix to apply we have to have at least one non-ring bond
       // that terminates in ring atoms. Find those bonds:
-      std::vector<const Bond *> possibleBonds;
+      PRECONDITION(possibleBonds.size() == 0,
+                   "Bug with possibleBonds in findSSSR");
       for (unsigned int i = 0; i < mol.getNumBonds(); ++i) {
         if (!ringBonds[i]) {
-          const Bond *bnd = mol.getBondWithIdx(i);
-          if (ringAtoms[bnd->getBeginAtomIdx()] &&
-              ringAtoms[bnd->getEndAtomIdx()]) {
-            possibleBonds.push_back(bnd);
+          const BondData &bond = mol.getBond(i);
+          if (ringAtoms[bond.getBeginAtomIdx()] &&
+              ringAtoms[bond.getEndAtomIdx()]) {
+            possibleBonds.push_back(i);
             break;
           }
         }
       }
-      boost::dynamic_bitset<> deadBonds(mol.getNumBonds());
+      deadBonds.reset();
       while (possibleBonds.size()) {
         bool ringFound = FindRings::findRingConnectingAtoms(
             mol, possibleBonds[0], fragRes, invars, ringBonds, ringAtoms);
         if (!ringFound) {
-          deadBonds.set(possibleBonds[0]->getIdx(), 1);
+          deadBonds.set(possibleBonds[0], true);
         }
         possibleBonds.clear();
         // check if we need to repeat the process:
         for (unsigned int i = 0; i < mol.getNumBonds(); ++i) {
           if (!ringBonds[i]) {
-            const Bond *bnd = mol.getBondWithIdx(i);
-            if (!deadBonds[bnd->getIdx()] &&
-                ringAtoms[bnd->getBeginAtomIdx()] &&
-                ringAtoms[bnd->getEndAtomIdx()]) {
-              possibleBonds.push_back(bnd);
+            const BondData &bond = mol.getBond(i);
+            if (!deadBonds[i] &&
+                ringAtoms[bond.getBeginAtomIdx()] &&
+                ringAtoms[bond.getEndAtomIdx()]) {
+              possibleBonds.push_back(i);
               break;
             }
           }
@@ -1099,18 +1186,17 @@ int findSSSR(const ROMol &mol, VECT_INT_VECT &res, bool includeDativeBonds) {
             << "WARNING: could not find number of expected rings. Switching to "
                "an approximate ring finding algorithm."
             << std::endl;
-        mol.getRingInfo()->reset();
-        fastFindRings(mol);
-        res.clear();
-        res = mol.getRingInfo()->atomRings();
-        return rdcast<int>(res.size());
+        ringInfo.reset();
+        fastFindRings(mol, ringInfo);
+        return rdcast<int>(ringInfo.numRings());
       }
     }
     // if we have more than expected we need to do some cleanup
     // otherwise do som clean up work
     // std::cerr<<"  check: "<<ssiz<<" "<<nexpt<<std::endl;
     if (ssiz > nexpt) {
-      FindRings::removeExtraRings(fragRes, nexpt, mol);
+      FindRings::removeExtraRings(fragRes, mol, extraRingAtoms,
+                                  extraRingBegins);
     }
 
     res.reserve(res.size() + fragRes.size());
@@ -1125,7 +1211,7 @@ int findSSSR(const ROMol &mol, VECT_INT_VECT &res, bool includeDativeBonds) {
   // update the ring memberships of atoms and bonds in the molecule:
   // store the SSSR rings on the molecule as a property
   // we will ignore any existing SSSRs on the molecule - simply overwrite
-  return rdcast<int>(res.size());
+  return rdcast<int>(ringInfo.numRings());
 }
 
 int symmetrizeSSSR(ROMol &mol, bool includeDativeBonds) {
@@ -1135,27 +1221,41 @@ int symmetrizeSSSR(ROMol &mol, bool includeDativeBonds) {
 
 int symmetrizeSSSR(ROMol &mol, VECT_INT_VECT &res, bool includeDativeBonds) {
   res.clear();
-  VECT_INT_VECT sssrs;
 
+  symmetrizeSSSR(mol.asRDMol(), includeDativeBonds);
+
+  // Fill in res from the ring info
+  const RingInfoCache &ringInfo = mol.asRDMol().getRingInfo();
+  const size_t numRings = ringInfo.numRings();
+  const uint32_t *data = ringInfo.atomsInRings.data();
+  // Ensure the reinterpret_cast is safe, at least for atom indices
+  static_assert(sizeof(int) == sizeof(uint32_t));
+  const int *intData = reinterpret_cast<const int *>(data);
+  res.reserve(numRings);
+  for (size_t ringIndex = 0; ringIndex < numRings; ++ringIndex) {
+    uint32_t beginIndex = ringInfo.ringBegins[ringIndex];
+    uint32_t endIndex = ringInfo.ringBegins[ringIndex + 1];
+    res.emplace_back(intData + beginIndex, intData + endIndex);
+  }
+}
+
+int symmetrizeSSSR(RDMol &mol, bool includeDativeBonds) {
   // FIX: need to set flag here the symmetrization has been done in order to
   // avoid repeating this work
-  findSSSR(mol, sssrs, includeDativeBonds);
+  std::vector<atomindex_t> extraRingAtoms;
+  std::vector<uint32_t> extraRingBegins;
+  findSSSR(mol, mol.getRingInfo(), includeDativeBonds, &extraRingAtoms,
+           &extraRingBegins);
 
   // reinit as SYMM_SSSR
-  mol.getRingInfo()->initialize(FIND_RING_TYPE_SYMM_SSSR);
-
-  res.reserve(sssrs.size());
-  for (const auto &r : sssrs) {
-    res.emplace_back(r);
-  }
+  mol.getRingInfo().isInit = true;
+  mol.getRingInfo().findRingType = FIND_RING_TYPE_SYMM_SSSR;
 
   // now check if there are any extra rings on the molecule
-  if (!mol.hasProp(common_properties::extraRings)) {
+  if (extraRingAtoms.size() == 0) {
     // no extra rings nothing to be done
-    return rdcast<int>(res.size());
+    return rdcast<int>(mol.getRingInfo().numRings());
   }
-  const VECT_INT_VECT &extras =
-      mol.getProp<VECT_INT_VECT>(common_properties::extraRings);
 
   // convert the rings to bond ids
   VECT_INT_VECT bondsssrs;
@@ -1212,17 +1312,14 @@ int symmetrizeSSSR(ROMol &mol, VECT_INT_VECT &res, bool includeDativeBonds) {
       }
 
       if (shareBond && replacesAllUniqueBonds) {
-        res.push_back(extraAtomRing);
+        sssrs.push_back(extraAtomRing);
         FindRings::storeRingInfo(mol, extraAtomRing);
         break;
       }
     }
   }
 
-  if (mol.hasProp(common_properties::extraRings)) {
-    mol.clearProp(common_properties::extraRings);
-  }
-  return rdcast<int>(res.size());
+  return rdcast<int>(mol.getRingInfo().numRings());
 }
 
 namespace {
