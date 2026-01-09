@@ -607,6 +607,17 @@ struct RDKIT_GRAPHMOL_EXPORT PropArray {
         RDValue &caster = static_cast<RDValue *>(data)[index];
         if constexpr (std::is_same_v<RawType, std::string>) {
           std::string res;
+          // Check if the RDValue contains a PropToken and handle it specially
+          if (caster.getTag() == RDTypeTag::AnyTag) {
+            try {
+              auto &anyVal = rdvalue_cast<std::any &>(caster);
+              if (anyVal.type() == typeid(PropToken)) {
+                return std::any_cast<PropToken>(anyVal).getString();
+              }
+            } catch (...) {
+              // Fall through to rdvalue_tostring
+            }
+          }
           rdvalue_tostring(caster, res);
           return res;
         } else {
@@ -895,6 +906,15 @@ private:
     auto getRDValueTag(uint32_t index) const {
       PRECONDITION(d_scope != Scope::MOL, "Array data only for non-MOL scope");
       return d_arrayData.getRDValueTag(index);
+    }
+
+    // Get property value as RDValue for pickling
+    RDValue getValueAsRDValue(uint32_t index = 0) const {
+      if (d_scope == Scope::MOL) {
+        return d_inPlaceData;
+      } else {
+        return d_arrayData.toRDValue(index);
+      }
     }
   };
 
@@ -1602,6 +1622,8 @@ public:
     return stereoGroups.get();
   }
   void setStereoGroups(std::unique_ptr<StereoGroups> &&groups);
+  //! Manually tell rdmol that the compat data conformers may have been modified.
+  void markStereoGroupsAsCompatModified() const;
 
   std::vector<SubstanceGroup>& getSubstanceGroups() { return substanceGroups; }
   const std::vector<SubstanceGroup>& getSubstanceGroups() const { return substanceGroups; }
@@ -1839,20 +1861,34 @@ public:
     }
     existing->d_isComputed = computed;
     auto existingFamily = existing->d_arrayData.family;
-    if (existingFamily != TypeToPropertyType<T>::family && existingFamily != PropertyType::ANY) {
+    auto newFamily = TypeToPropertyType<T>::family;
+
+    if (existingFamily != newFamily && existingFamily != PropertyType::ANY) {
       if (!supportTypeMismatch) {
         throw ValueErrorException("Property type mismatch");
       }
-      // Convert to RDValue
-      existing->d_arrayData.convertToRDValue();
-      PRECONDITION(existing->d_arrayData.family == PropertyType::ANY,
-                   "convertToRDValue should make family ANY");
-      existingFamily = PropertyType::ANY;
+
+      // Check if types are compatible signed/unsigned integer pairs
+      bool integerCompatible =
+          (existingFamily == PropertyType::INT32 && newFamily == PropertyType::UINT32) ||
+          (existingFamily == PropertyType::UINT32 && newFamily == PropertyType::INT32) ||
+          (existingFamily == PropertyType::INT64 && newFamily == PropertyType::UINT64) ||
+          (existingFamily == PropertyType::UINT64 && newFamily == PropertyType::INT64);
+
+      if (!integerCompatible) {
+        // Convert to RDValue for non-compatible type mismatches
+        existing->d_arrayData.convertToRDValue();
+        PRECONDITION(existing->d_arrayData.family == PropertyType::ANY,
+                     "convertToRDValue should make family ANY");
+        existingFamily = PropertyType::ANY;
+      }
+      // If integer-compatible, keep existing type and fall through
     }
+
     auto &arr = existing->d_arrayData;
-    if (TypeToPropertyType<T>::family == PropertyType::ANY || existingFamily == PropertyType::ANY) {
+    if (newFamily == PropertyType::ANY || existingFamily == PropertyType::ANY) {
+      // Store as RDValue
       auto* data = static_cast<RDValue*>(arr.data);
-      // Default value may still need cleaning even if not previously set.
       RDValue::cleanup_rdvalue(data[index]);
       if constexpr (std::is_same_v<T, RDValue>) {
         copy_rdvalue(data[index], value);
@@ -1861,7 +1897,26 @@ public:
       } else {
         data[index] = value;
       }
+    } else if ((existingFamily == PropertyType::INT32 || existingFamily == PropertyType::UINT32) &&
+               (newFamily == PropertyType::INT32 || newFamily == PropertyType::UINT32)) {
+      // Store 32-bit int/uint using existing family's storage
+      auto *data = static_cast<int32_t *>(arr.data);
+      if constexpr (std::is_same_v<T, int> || std::is_same_v<T, unsigned int>) {
+        data[index] = *reinterpret_cast<const int32_t*>(&value);
+      } else {
+        throw ValueErrorException("Type mismatch in setSingleProp for 32-bit integer");
+      }
+    } else if ((existingFamily == PropertyType::INT64 || existingFamily == PropertyType::UINT64) &&
+               (newFamily == PropertyType::INT64 || newFamily == PropertyType::UINT64)) {
+      // Store 64-bit int/uint using existing family's storage
+      auto *data = static_cast<int64_t *>(arr.data);
+      if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, uint64_t>) {
+        data[index] = *reinterpret_cast<const int64_t*>(&value);
+      } else {
+        throw ValueErrorException("Type mismatch in setSingleProp for 64-bit integer");
+      }
     } else {
+      // Exact type match
       auto *data = static_cast<T *>(arr.data);
       data[index] = value;
     }

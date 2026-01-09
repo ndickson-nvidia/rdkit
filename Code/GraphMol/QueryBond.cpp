@@ -67,7 +67,7 @@ void QueryBond::setBondDir(BondDir bD) {
 void QueryBond::setQuery(QUERYBOND_QUERY *what) {
   dp_query.reset(what);
   getDataRDMol().setBondQueryCompat(getIdx(), what);
-  PRECONDITION(getDataRDMol().getBondQuery(getIdx()) != nullptr,
+  PRECONDITION(what == nullptr || getDataRDMol().getBondQuery(getIdx()) != nullptr,
                "Missing new query");
 }
 
@@ -76,6 +76,7 @@ void QueryBond::expandQuery(QUERYBOND_QUERY *what,
                             bool maintainOrder) {
   std::unique_ptr<QUERYBOND_QUERY> whatPtr(what);
   QueryOps::expandQuery(dp_query, std::move(whatPtr), how, maintainOrder);
+  getDataRDMol().setBondQueryCompat(getIdx(), dp_query.get());
 }
 
 namespace {
